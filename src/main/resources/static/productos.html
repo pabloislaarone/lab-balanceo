@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Productos · Lab Balanceo</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: "Segoe UI", Arial, sans-serif; background: #eef2f7; color: #1f2937; }
+        header { background: #1f2937; color: #fff; padding: 14px 24px; display: flex;
+                 justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+        header h1 { font-size: 18px; }
+        .usuario { font-size: 14px; display: flex; align-items: center; gap: 12px; }
+        .badge { background: #16a34a; color: #fff; padding: 4px 10px; border-radius: 999px;
+                 font-size: 12px; font-family: Consolas, monospace; }
+        main { max-width: 1000px; margin: 24px auto; padding: 0 16px; display: grid; gap: 20px; }
+        .panel { background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 4px 16px rgba(0,0,0,.06); }
+        .panel h2 { font-size: 16px; margin-bottom: 14px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+        label { display: block; font-size: 12px; color: #4b5563; margin-bottom: 4px; }
+        input { width: 100%; padding: 9px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; }
+        .acciones { margin-top: 14px; display: flex; gap: 8px; }
+        button { padding: 9px 16px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
+        .primario { background: #2563eb; color: #fff; }
+        .secundario { background: #e5e7eb; color: #111827; }
+        .peligro { background: #dc2626; color: #fff; }
+        .editar { background: #f59e0b; color: #fff; }
+        .salir { background: transparent; color: #fff; border: 1px solid #6b7280; }
+        .tabla-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        th, td { padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: left; white-space: nowrap; }
+        th { background: #f9fafb; font-size: 12px; text-transform: uppercase; color: #6b7280; }
+        td.ops { display: flex; gap: 6px; }
+        td.ops button { padding: 6px 10px; font-size: 12px; }
+        .vacio { text-align: center; color: #9ca3af; padding: 20px; }
+        .msg { font-size: 13px; margin-top: 10px; min-height: 18px; }
+        .error { color: #dc2626; } .ok { color: #16a34a; }
+        .log { font-family: Consolas, monospace; font-size: 12px; max-height: 160px; overflow-y: auto;
+               background: #111827; color: #a7f3d0; padding: 10px; border-radius: 8px; }
+    </style>
+</head>
+<body>
+<header>
+    <h1>Gestión de Productos</h1>
+    <div class="usuario">
+        <span id="nombreUsuario"></span>
+        <span class="badge" id="servidor">Servidor: —</span>
+        <button class="salir" id="btnSalir">Cerrar sesión</button>
+    </div>
+</header>
+
+<main>
+    <section class="panel">
+        <h2 id="tituloForm">Nuevo producto</h2>
+        <form id="form">
+            <input type="hidden" id="id">
+            <div class="grid">
+                <div><label for="nombre">Nombre</label><input id="nombre" required maxlength="100"></div>
+                <div><label for="descripcion">Descripción</label><input id="descripcion" maxlength="255"></div>
+                <div><label for="precio">Precio (S/)</label><input id="precio" type="number" step="0.01" min="0" required></div>
+                <div><label for="stock">Stock</label><input id="stock" type="number" min="0" required></div>
+            </div>
+            <div class="acciones">
+                <button type="submit" class="primario" id="btnGuardar">Guardar</button>
+                <button type="button" class="secundario" id="btnCancelar">Cancelar</button>
+            </div>
+            <p id="msg" class="msg"></p>
+        </form>
+    </section>
+
+    <section class="panel">
+        <h2>Listado</h2>
+        <div class="tabla-wrap">
+            <table>
+                <thead>
+                <tr><th>ID</th><th>Nombre</th><th>Descripción</th><th>Precio</th><th>Stock</th><th>Acciones</th></tr>
+                </thead>
+                <tbody id="tbody"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="panel">
+        <h2>Registro de peticiones (qué servidor respondió)</h2>
+        <div class="log" id="log"></div>
+    </section>
+</main>
+
+<script>
+    const token = localStorage.getItem('token');
+    if (!token) location.href = 'index.html';
+    document.getElementById('nombreUsuario').textContent = localStorage.getItem('nombre') || '';
+
+    const form = document.getElementById('form');
+    const msg = document.getElementById('msg');
+
+    function salir() {
+        localStorage.removeItem('token');
+        localStorage.removeItem('nombre');
+        location.href = 'index.html';
+    }
+    document.getElementById('btnSalir').onclick = salir;
+
+    function mensaje(t, tipo) { msg.textContent = t; msg.className = 'msg ' + tipo; }
+
+    function escapar(v) {
+        return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    // Todas las llamadas pasan por aqui: agrega el token y registra que servidor respondio
+    async function api(url, opciones = {}) {
+        opciones.headers = Object.assign({
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + token
+        }, opciones.headers || {});
+        const res = await fetch(url, opciones);
+        const servidor = res.headers.get('X-Servido-Por') || '?';
+        document.getElementById('servidor').textContent = 'Servidor: ' + servidor;
+        const log = document.getElementById('log');
+        log.innerHTML = `[${new Date().toLocaleTimeString()}] ${opciones.method || 'GET'} ${url} → ${res.status} · ${escapar(servidor)}<br>` + log.innerHTML;
+        if (res.status === 401) { salir(); throw new Error('Sesión expirada'); }
+        return res;
+    }
+
+    async function cargar() {
+        const res = await api('/api/productos');
+        const productos = await res.json();
+        const tbody = document.getElementById('tbody');
+        if (productos.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="vacio">No hay productos registrados</td></tr>';
+            return;
+        }
+        tbody.innerHTML = productos.map(p => `
+            <tr>
+                <td>${p.id}</td>
+                <td>${escapar(p.nombre)}</td>
+                <td>${escapar(p.descripcion)}</td>
+                <td>S/ ${Number(p.precio).toFixed(2)}</td>
+                <td>${p.stock}</td>
+                <td class="ops">
+                    <button class="editar" onclick="editar(${p.id})">Editar</button>
+                    <button class="peligro" onclick="eliminar(${p.id})">Eliminar</button>
+                </td>
+            </tr>`).join('');
+    }
+
+    function limpiar() {
+        form.reset();
+        document.getElementById('id').value = '';
+        document.getElementById('tituloForm').textContent = 'Nuevo producto';
+        document.getElementById('btnGuardar').textContent = 'Guardar';
+    }
+    document.getElementById('btnCancelar').onclick = () => { limpiar(); mensaje('', ''); };
+
+    async function editar(id) {
+        const res = await api('/api/productos/' + id);
+        if (!res.ok) { mensaje('Producto no encontrado', 'error'); return; }
+        const p = await res.json();
+        document.getElementById('id').value = p.id;
+        document.getElementById('nombre').value = p.nombre;
+        document.getElementById('descripcion').value = p.descripcion || '';
+        document.getElementById('precio').value = p.precio;
+        document.getElementById('stock').value = p.stock;
+        document.getElementById('tituloForm').textContent = 'Editar producto #' + p.id;
+        document.getElementById('btnGuardar').textContent = 'Actualizar';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    async function eliminar(id) {
+        if (!confirm('¿Eliminar el producto #' + id + '?')) return;
+        const res = await api('/api/productos/' + id, { method: 'DELETE' });
+        if (res.ok) { mensaje('Producto eliminado', 'ok'); cargar(); }
+        else mensaje('No se pudo eliminar', 'error');
+    }
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const id = document.getElementById('id').value;
+        const body = JSON.stringify({
+            nombre: document.getElementById('nombre').value.trim(),
+            descripcion: document.getElementById('descripcion').value.trim(),
+            precio: parseFloat(document.getElementById('precio').value),
+            stock: parseInt(document.getElementById('stock').value, 10)
+        });
+        const res = await api(id ? '/api/productos/' + id : '/api/productos',
+                              { method: id ? 'PUT' : 'POST', body });
+        if (res.ok) {
+            mensaje(id ? 'Producto actualizado' : 'Producto creado', 'ok');
+            limpiar();
+            cargar();
+        } else {
+            mensaje('Revisa los datos ingresados', 'error');
+        }
+    });
+
+    cargar();
+</script>
+</body>
+</html>
